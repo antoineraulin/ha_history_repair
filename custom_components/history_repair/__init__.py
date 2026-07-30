@@ -244,7 +244,26 @@ def _fix_zero_values_sync(
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up the History Repair component."""
+    """Set up the History Repair component from configuration.yaml (if present)."""
+    _register_services(hass)
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: Any) -> bool:
+    """Set up History Repair from a config entry (UI)."""
+    _register_services(hass)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: Any) -> bool:
+    """Unload a config entry."""
+    return True
+
+
+def _register_services(hass: HomeAssistant) -> None:
+    """Register custom services if not already registered."""
+    if hass.services.has_service(DOMAIN, SERVICE_FIND_ZERO_VALUES):
+        return
 
     async def handle_find_zero_values(call: ServiceCall) -> ServiceResponse:
         entity_id = call.data["entity_id"]
@@ -252,10 +271,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         end_ts = _ts_from_dt(call.data.get("end_time"))
 
         instance = get_instance(hass)
-        res = await instance.async_add_executor_job(
+        return await instance.async_add_executor_job(
             _find_zero_intervals_entry, hass, entity_id, start_ts, end_ts
         )
-        return res
 
     async def handle_fix_zero_values(call: ServiceCall) -> ServiceResponse:
         entity_ids = call.data["entity_id"]
@@ -268,10 +286,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         fix_statistics = call.data["fix_statistics"]
 
         instance = get_instance(hass)
-        res = await instance.async_add_executor_job(
+        return await instance.async_add_executor_job(
             _fix_zero_values_sync, hass, entity_ids, start_ts, end_ts, dry_run, fix_statistics
         )
-        return res
 
     hass.services.async_register(
         DOMAIN,
@@ -288,8 +305,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         schema=FIX_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
-
-    return True
 
 
 def _find_zero_intervals_entry(hass: HomeAssistant, entity_id: str, start_ts: float | None, end_ts: float | None) -> dict[str, Any]:
