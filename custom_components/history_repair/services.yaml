@@ -1,0 +1,62 @@
+find_zero_values:
+  name: Find zero values
+  description: Scan entity history to detect intervals where values dropped to zero.
+  supports_response: "only"
+  fields:
+    entity_id:
+      name: Entity
+      description: Target entity to scan.
+      required: true
+      selector:
+        entity: {}
+    start_time:
+      name: Start Time
+      description: Start of the scan interval (ISO format or datetime).
+      required: false
+      selector:
+        datetime: {}
+    end_time:
+      name: End Time
+      description: End of the scan interval (ISO format or datetime).
+      required: false
+      selector:
+        datetime: {}
+
+fix_zero_values:
+  name: Fix zero values
+  description: Repair zero value intervals in states and long-term statistics tables.
+  supports_response: "optional"
+  fields:
+    entity_id:
+      name: Entity
+      description: Target entity or list of entities to repair.
+      required: true
+      selector:
+        entity:
+          multiple: true
+    start_time:
+      name: Start Time
+      description: Start of the repair interval.
+      required: false
+      selector:
+        datetime: {}
+    end_time:
+      name: End Time
+      description: End of the repair interval.
+      required: false
+      selector:
+        datetime: {}
+    dry_run:
+      name: Dry Run
+      description: Preview changes without committing to database (default true).
+      required: false
+      default: true
+      selector:
+        boolean: {}
+    fix_statistics:
+      name: Fix Statistics
+      description: Repair long-term statistics tables along with states (default true).
+      required: false
+      default: true
+      selector:
+        boolean: {}
