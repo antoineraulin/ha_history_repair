@@ -29,7 +29,7 @@ TIME_SCHEMA = {
 
 FIND_SCHEMA = vol.Schema(
     {
-        vol.Required("entity_id"): cv.entity_id,
+        vol.Required("entity_id"): cv.entity_ids,
         **TIME_SCHEMA,
     }
 )
@@ -70,7 +70,7 @@ def _ts_from_dt(dt_val: Any) -> float | None:
         return None
     if isinstance(dt_val, (int, float)):
         return float(dt_val)
-    return dt_util.utc_to_timestamp(dt_val)
+    return dt_util.as_timestamp(dt_val)
 
 
 def _find_zero_intervals(session: Any, entity_id: str, start_ts: float | None, end_ts: float | None) -> dict[str, Any]:
@@ -80,18 +80,21 @@ def _find_zero_intervals(session: Any, entity_id: str, start_ts: float | None, e
         return {"entity_id": entity_id, "zero_intervals_found": 0, "intervals": []}
 
     # Locate initial V_prev before start_ts if start_ts is specified
+    # ponytail: query recent rows before start_ts to find the latest valid non-zero float
     v_prev: float | None = None
     if start_ts is not None:
-        prev_row = (
+        prev_rows = (
             session.query(States.state)
             .filter(States.metadata_id == meta.metadata_id, States.last_updated_ts < start_ts)
             .order_by(States.last_updated_ts.desc())
-            .first()
+            .limit(100)
+            .all()
         )
-        if prev_row:
+        for prev_row in prev_rows:
             f_val = _to_float(prev_row.state)
             if f_val is not None and not _is_zero(prev_row.state):
                 v_prev = f_val
+                break
 
     query = session.query(States.state, States.last_updated_ts).filter(States.metadata_id == meta.metadata_id)
     if start_ts is not None:
@@ -163,7 +166,7 @@ def _fix_zero_values_sync(
         for entity_id in entity_ids:
             scan_res = _find_zero_intervals(session, entity_id, start_ts, end_ts)
             intervals = scan_res["intervals"]
-            
+
             states_modified = 0
             stats_modified = 0
             repaired_intervals = []
@@ -203,7 +206,7 @@ def _fix_zero_values_sync(
                             .filter(
                                 table_cls.metadata_id == stat_meta.id,
                                 table_cls.start_ts <= inv_end,
-                                (table_cls.start_ts + duration_sec) >= inv_start,
+                                table_cls.start_ts >= inv_start - duration_sec,
                             )
                             .all()
                         )
@@ -257,22 +260,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: Any) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: Any) -> bool:
     """Unload a config entry."""
+    # ponytail: clean up services if no remaining entries
+    current_entries = hass.config_entries.async_entries(DOMAIN) if hasattr(hass, "config_entries") else []
+    if len(current_entries) <= 1:
+        if hass.services.has_service(DOMAIN, SERVICE_FIND_ZERO_VALUES):
+            hass.services.async_remove(DOMAIN, SERVICE_FIND_ZERO_VALUES)
+        if hass.services.has_service(DOMAIN, SERVICE_FIX_ZERO_VALUES):
+            hass.services.async_remove(DOMAIN, SERVICE_FIX_ZERO_VALUES)
     return True
 
 
 def _register_services(hass: HomeAssistant) -> None:
     """Register custom services if not already registered."""
+    _LOGGER.debug(
+        "Register services called"
+    )
     if hass.services.has_service(DOMAIN, SERVICE_FIND_ZERO_VALUES):
+        _LOGGER.debug(
+            "Find zero values service exist, return"
+        )
         return
 
     async def handle_find_zero_values(call: ServiceCall) -> ServiceResponse:
-        entity_id = call.data["entity_id"]
+        entity_ids = call.data["entity_id"]
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+
         start_ts = _ts_from_dt(call.data.get("start_time"))
         end_ts = _ts_from_dt(call.data.get("end_time"))
 
         instance = get_instance(hass)
         return await instance.async_add_executor_job(
-            _find_zero_intervals_entry, hass, entity_id, start_ts, end_ts
+            _find_zero_intervals_entry, hass, entity_ids, start_ts, end_ts
         )
 
     async def handle_fix_zero_values(call: ServiceCall) -> ServiceResponse:
@@ -282,20 +301,27 @@ def _register_services(hass: HomeAssistant) -> None:
 
         start_ts = _ts_from_dt(call.data.get("start_time"))
         end_ts = _ts_from_dt(call.data.get("end_time"))
-        dry_run = call.data["dry_run"]
-        fix_statistics = call.data["fix_statistics"]
+        dry_run = call.data.get("dry_run", True)
+        fix_statistics = call.data.get("fix_statistics", True)
 
         instance = get_instance(hass)
         return await instance.async_add_executor_job(
             _fix_zero_values_sync, hass, entity_ids, start_ts, end_ts, dry_run, fix_statistics
         )
 
+    _LOGGER.debug(
+        "async register find zero"
+    )
     hass.services.async_register(
         DOMAIN,
         SERVICE_FIND_ZERO_VALUES,
         handle_find_zero_values,
         schema=FIND_SCHEMA,
         supports_response=SupportsResponse.ONLY,
+    )
+
+    _LOGGER.debug(
+        "async register fix zero"
     )
 
     hass.services.async_register(
@@ -307,6 +333,12 @@ def _register_services(hass: HomeAssistant) -> None:
     )
 
 
-def _find_zero_intervals_entry(hass: HomeAssistant, entity_id: str, start_ts: float | None, end_ts: float | None) -> dict[str, Any]:
+def _find_zero_intervals_entry(
+    hass: HomeAssistant, entity_ids: list[str], start_ts: float | None, end_ts: float | None
+) -> dict[str, Any]:
     with session_scope(hass=hass, read_only=True) as session:
-        return _find_zero_intervals(session, entity_id, start_ts, end_ts)
+        results = {
+            eid: _find_zero_intervals(session, eid, start_ts, end_ts)
+            for eid in entity_ids
+        }
+        return {"results": results}

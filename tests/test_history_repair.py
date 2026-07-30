@@ -1,6 +1,7 @@
 """Unit tests for history_repair core logic."""
 import sys
 import os
+import datetime
 import unittest
 from unittest.mock import MagicMock
 
@@ -25,9 +26,15 @@ except ImportError:
     sys.modules["homeassistant.helpers.config_validation"] = ha.helpers.config_validation
     sys.modules["homeassistant.util"] = ha.util
     
-    # Mock utc_to_timestamp and utc_from_timestamp
+    ha.components.recorder.db_schema.States.metadata_id = MagicMock()
+    ha.components.recorder.db_schema.States.last_updated_ts.__lt__ = lambda self, other: True
+    ha.components.recorder.db_schema.States.last_updated_ts.__gt__ = lambda self, other: True
+    ha.components.recorder.db_schema.States.last_updated_ts.__le__ = lambda self, other: True
+    ha.components.recorder.db_schema.States.last_updated_ts.__ge__ = lambda self, other: True
+    
+    # Mock as_timestamp and utc_from_timestamp
     import datetime
-    ha.util.dt.utc_to_timestamp = lambda dt: dt.timestamp() if isinstance(dt, datetime.datetime) else dt
+    ha.util.dt.as_timestamp = lambda dt: dt.timestamp() if isinstance(dt, datetime.datetime) else (float(dt) if isinstance(dt, (int, float)) else None)
     ha.util.dt.utc_from_timestamp = lambda ts: datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -54,6 +61,8 @@ class TestHistoryRepairLogic(unittest.TestCase):
     def test_ts_from_dt(self):
         self.assertEqual(_ts_from_dt(100.0), 100.0)
         self.assertIsNone(_ts_from_dt(None))
+        dt = datetime.datetime(2026, 7, 29, 0, 0, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(_ts_from_dt(dt), dt.timestamp())
 
     def test_find_zero_intervals_mock(self):
         session = MagicMock()
@@ -81,6 +90,29 @@ class TestHistoryRepairLogic(unittest.TestCase):
         self.assertEqual(inv["previous_valid_value"], 20.0)
         self.assertEqual(inv["start_ts"], 1005.0)
         self.assertEqual(inv["end_ts"], 1010.0)
+
+
+    def test_find_zero_intervals_lookback(self):
+        session = MagicMock()
+        meta_mock = MagicMock()
+        meta_mock.metadata_id = 1
+
+        prev_row1 = MagicMock(state="0.0")
+        prev_row2 = MagicMock(state="unavailable")
+        prev_row3 = MagicMock(state="42.0")
+
+        # mock first call for StatesMeta, subsequent queries for States
+        session.query.return_value.filter.return_value.first.return_value = meta_mock
+        
+        q_mock = MagicMock()
+        session.query.return_value.filter.return_value = q_mock
+        q_mock.filter.return_value = q_mock
+        q_mock.order_by.return_value = q_mock
+        q_mock.limit.return_value = q_mock
+        q_mock.all.side_effect = [[prev_row1, prev_row2, prev_row3], [("0.0", 2000.0)]]
+
+        res = _find_zero_intervals(session, "sensor.test", 1500.0, None)
+        self.assertEqual(res["intervals"][0]["previous_valid_value"], 42.0)
 
 
 if __name__ == "__main__":

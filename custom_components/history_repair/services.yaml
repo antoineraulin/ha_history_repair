@@ -1,11 +1,10 @@
 find_zero_values:
   name: Find zero values
   description: Scan entity history to detect intervals where values dropped to zero.
-  supports_response: "only"
   fields:
     entity_id:
       name: Entity
-      description: Target entity to scan.
+      description: Entity ID(s) to scan for zero-value intervals.
       required: true
       selector:
         entity: {}
@@ -25,15 +24,13 @@ find_zero_values:
 fix_zero_values:
   name: Fix zero values
   description: Repair zero value intervals in states and long-term statistics tables.
-  supports_response: "optional"
   fields:
     entity_id:
       name: Entity
-      description: Target entity or list of entities to repair.
+      description: Entity ID(s) to repair zero-value intervals for.
       required: true
       selector:
-        entity:
-          multiple: true
+        entity: {}
     start_time:
       name: Start Time
       description: Start of the repair interval.

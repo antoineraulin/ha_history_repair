@@ -13,7 +13,6 @@ Scans history states for an entity and returns detected zero intervals alongside
 **Developer Tools / Service Call (YAML):**
 ```yaml
 service: history_repair.find_zero_values
-target: {}
 data:
   entity_id: sensor.temperature_salon
   start_time: "2026-07-29T00:00:00Z"
@@ -44,7 +43,6 @@ Repairs zero-value intervals by forward-filling the last valid numeric state ($V
 **Developer Tools / Service Call (YAML):**
 ```yaml
 service: history_repair.fix_zero_values
-target: {}
 data:
   entity_id:
     - sensor.temperature_salon
