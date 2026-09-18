@@ -3,7 +3,7 @@ import sys
 import os
 import datetime
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # ponytail: mock homeassistant & voluptuous modules if not installed in host python env
 try:
@@ -39,7 +39,18 @@ except ImportError:
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from custom_components.history_repair.__init__ import _is_zero, _to_float, _ts_from_dt, _find_zero_intervals
+from custom_components.history_repair.__init__ import (
+    _is_zero,
+    _to_float,
+    _ts_from_dt,
+    _find_zero_intervals,
+    _erase_history_sync,
+    States,
+    StatesMeta,
+    Statistics,
+    StatisticsMeta,
+    StatisticsShortTerm,
+)
 
 
 class TestHistoryRepairLogic(unittest.TestCase):
@@ -113,6 +124,56 @@ class TestHistoryRepairLogic(unittest.TestCase):
 
         res = _find_zero_intervals(session, "sensor.test", 1500.0, None)
         self.assertEqual(res["intervals"][0]["previous_valid_value"], 42.0)
+
+
+    def test_erase_history_sync(self):
+        session = MagicMock()
+        meta_mock = MagicMock()
+        meta_mock.metadata_id = 1
+        stat_meta_mock = MagicMock()
+        stat_meta_mock.id = 5
+
+        def make_query():
+            q = MagicMock()
+            q.filter.return_value = q
+            return q
+
+        states_meta_q = make_query()
+        states_meta_q.first.return_value = meta_mock
+        states_q = make_query()
+        states_q.delete.return_value = 10
+        stats_meta_q = make_query()
+        stats_meta_q.first.return_value = stat_meta_mock
+        short_q = make_query()
+        short_q.delete.return_value = 4
+        long_q = make_query()
+        long_q.delete.return_value = 3
+
+        model_queries = {
+            StatesMeta: states_meta_q,
+            StatisticsMeta: stats_meta_q,
+            States: states_q,
+            StatisticsShortTerm: short_q,
+            Statistics: long_q,
+        }
+        session.query.side_effect = lambda model: model_queries[model]
+
+        cm = MagicMock()
+        cm.__enter__.return_value = session
+        cm.__exit__.return_value = False
+
+        with patch("custom_components.history_repair.__init__.session_scope", return_value=cm):
+            res = _erase_history_sync(MagicMock(), ["sensor.test"], None, None, False)
+
+        self.assertEqual(list(res["results"].keys()), ["sensor.test"])
+        result = res["results"]["sensor.test"]
+        self.assertFalse(result["dry_run"])
+        self.assertEqual(result["states_deleted"], 10)
+        self.assertEqual(result["statistics_short_term_deleted"], 4)
+        self.assertEqual(result["statistics_deleted"], 3)
+        states_q.delete.assert_called_once()
+        short_q.delete.assert_called_once()
+        long_q.delete.assert_called_once()
 
 
 if __name__ == "__main__":

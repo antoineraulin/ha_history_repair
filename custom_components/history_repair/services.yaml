@@ -57,3 +57,33 @@ fix_zero_values:
       default: true
       selector:
         boolean: {}
+
+erase_history:
+  name: Erase history
+  description: Permanently delete an entity's raw states plus short-term and long-term statistics. Dry run defaults to true and deletes nothing.
+  fields:
+    entity_id:
+      name: Entity
+      description: Entity ID(s) whose history will be erased.
+      required: true
+      selector:
+        entity: {}
+    start_time:
+      name: Start Time
+      description: Start of the erase interval (ISO format or datetime).
+      required: false
+      selector:
+        datetime: {}
+    end_time:
+      name: End Time
+      description: End of the erase interval (ISO format or datetime).
+      required: false
+      selector:
+        datetime: {}
+    dry_run:
+      name: Dry Run
+      description: Count matching rows without deleting anything (default true). Set false to permanently delete.
+      required: false
+      default: true
+      selector:
+        boolean: {}

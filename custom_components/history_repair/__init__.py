@@ -17,7 +17,12 @@ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, Supp
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SERVICE_FIND_ZERO_VALUES, SERVICE_FIX_ZERO_VALUES
+from .const import (
+    DOMAIN,
+    SERVICE_ERASE_HISTORY,
+    SERVICE_FIND_ZERO_VALUES,
+    SERVICE_FIX_ZERO_VALUES,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +44,14 @@ FIX_SCHEMA = vol.Schema(
         vol.Required("entity_id"): cv.entity_ids,
         vol.Optional("dry_run", default=True): cv.boolean,
         vol.Optional("fix_statistics", default=True): cv.boolean,
+        **TIME_SCHEMA,
+    }
+)
+
+ERASE_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_ids,
+        vol.Optional("dry_run", default=True): cv.boolean,
         **TIME_SCHEMA,
     }
 )
@@ -246,6 +259,62 @@ def _fix_zero_values_sync(
         return {"results": results}
 
 
+def _erase_history_sync(
+    hass: HomeAssistant,
+    entity_ids: list[str],
+    start_ts: float | None,
+    end_ts: float | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Erase an entity's history across states and statistics tables."""
+    # ponytail: count() on dry_run so a read-only session never issues a DELETE
+    def _count_or_delete(query: Any) -> int:
+        if dry_run:
+            return query.count() or 0
+        return query.delete(synchronize_session=False) or 0
+
+    # ponytail: session_scope handles commit on exit if read_only=False, or rollback if read_only=True
+    with session_scope(hass=hass, read_only=dry_run) as session:
+        results = {}
+
+        for entity_id in entity_ids:
+            states_deleted = 0
+            stats_short_deleted = 0
+            stats_long_deleted = 0
+
+            meta = session.query(StatesMeta).filter(StatesMeta.entity_id == entity_id).first()
+            if meta:
+                q = session.query(States).filter(States.metadata_id == meta.metadata_id)
+                if start_ts is not None:
+                    q = q.filter(States.last_updated_ts >= start_ts)
+                if end_ts is not None:
+                    q = q.filter(States.last_updated_ts <= end_ts)
+                states_deleted = _count_or_delete(q)
+
+            stat_meta = session.query(StatisticsMeta).filter(StatisticsMeta.statistic_id == entity_id).first()
+            if stat_meta:
+                for table_cls, name in ((StatisticsShortTerm, "short"), (Statistics, "long")):
+                    q = session.query(table_cls).filter(table_cls.metadata_id == stat_meta.id)
+                    if start_ts is not None:
+                        q = q.filter(table_cls.start_ts >= start_ts)
+                    if end_ts is not None:
+                        q = q.filter(table_cls.start_ts <= end_ts)
+                    deleted = _count_or_delete(q)
+                    if name == "short":
+                        stats_short_deleted = deleted
+                    else:
+                        stats_long_deleted = deleted
+
+            results[entity_id] = {
+                "dry_run": dry_run,
+                "states_deleted": states_deleted,
+                "statistics_short_term_deleted": stats_short_deleted,
+                "statistics_deleted": stats_long_deleted,
+            }
+
+        return {"results": results}
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the History Repair component from configuration.yaml (if present)."""
     _register_services(hass)
@@ -267,6 +336,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: Any) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_FIND_ZERO_VALUES)
         if hass.services.has_service(DOMAIN, SERVICE_FIX_ZERO_VALUES):
             hass.services.async_remove(DOMAIN, SERVICE_FIX_ZERO_VALUES)
+        if hass.services.has_service(DOMAIN, SERVICE_ERASE_HISTORY):
+            hass.services.async_remove(DOMAIN, SERVICE_ERASE_HISTORY)
     return True
 
 
@@ -309,6 +380,20 @@ def _register_services(hass: HomeAssistant) -> None:
             _fix_zero_values_sync, hass, entity_ids, start_ts, end_ts, dry_run, fix_statistics
         )
 
+    async def handle_erase_history(call: ServiceCall) -> ServiceResponse:
+        entity_ids = call.data["entity_id"]
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+
+        start_ts = _ts_from_dt(call.data.get("start_time"))
+        end_ts = _ts_from_dt(call.data.get("end_time"))
+        dry_run = call.data.get("dry_run", True)
+
+        instance = get_instance(hass)
+        return await instance.async_add_executor_job(
+            _erase_history_sync, hass, entity_ids, start_ts, end_ts, dry_run
+        )
+
     _LOGGER.debug(
         "async register find zero"
     )
@@ -329,6 +414,18 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_FIX_ZERO_VALUES,
         handle_fix_zero_values,
         schema=FIX_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    _LOGGER.debug(
+        "async register erase history"
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ERASE_HISTORY,
+        handle_erase_history,
+        schema=ERASE_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

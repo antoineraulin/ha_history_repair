@@ -69,3 +69,31 @@ data:
   }
 }
 ```
+
+### 3. `history_repair.erase_history`
+Permanently deletes an entity's full history across the `states`, `statistics_short_term`, and `statistics` tables. Optional `start_time` / `end_time` bound the erase. `dry_run` defaults to `true`, in which case nothing is deleted and only the matching row counts are returned.
+
+**Developer Tools / Service Call (YAML):**
+```yaml
+service: history_repair.erase_history
+data:
+  entity_id:
+    - sensor.temperature_salon
+  start_time: "2026-07-29T00:00:00Z"   # optional
+  end_time: "2026-07-29T23:59:59Z"     # optional
+  dry_run: true                        # Set false to permanently delete
+```
+
+**Response Example:**
+```json
+{
+  "results": {
+    "sensor.temperature_salon": {
+      "dry_run": true,
+      "states_deleted": 120,
+      "statistics_short_term_deleted": 24,
+      "statistics_deleted": 6
+    }
+  }
+}
+```
